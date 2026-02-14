@@ -1,6 +1,13 @@
 import ast
 import re
+import json
 from pathlib import Path
+
+# Try importing yaml
+try:
+    import yaml
+except ImportError:
+    yaml = None
 
 # --- CONSTANTS: DRF Generic View Defaults ---
 GENERIC_DEFAULTS = {
@@ -858,6 +865,154 @@ def find_generated_schemas(root_path):
     return found_files
 
 
+# --- SCHEMA PARSING LOGIC ---
+def load_schema_file(file_path):
+    path = Path(file_path)
+    with open(path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if path.suffix in [".yaml", ".yml"]:
+        if yaml is None:
+            raise ImportError(
+                "PyYAML is required to parse YAML files. Please install it with 'pip install PyYAML'."
+            )
+        return yaml.safe_load(content)
+    return json.loads(content)
+
+
+def get_ref_name(ref):
+    if not ref:
+        return None
+    return ref.split("/")[-1]
+
+
+def extract_schema_type(schema):
+    """Extracts type name from an OpenAPI schema object."""
+    if "$ref" in schema:
+        return get_ref_name(schema["$ref"])
+
+    stype = schema.get("type")
+    if stype == "array":
+        items = schema.get("items", {})
+        child = extract_schema_type(items)
+        return f"List[{child}]"
+
+    return stype or "Object"  # Default
+
+
+def parse_schema_file(file_path):
+    """Parses an OpenAPI/Swagger file into GenDoc format."""
+    data = load_schema_file(file_path)
+    specs = []
+    serializers_map = {}
+
+    # 1. Parse Components/Definitions (Serializers)
+    schemas = data.get("components", {}).get("schemas", {}) or data.get(
+        "definitions", {}
+    )
+
+    for name, schema in schemas.items():
+        fields = {}
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+
+        for prop_name, prop_details in properties.items():
+            prop_type = extract_schema_type(prop_details)
+            props_list = []
+            if prop_name in required:
+                props_list.append("Required")
+            else:
+                props_list.append("Optional")
+
+            if prop_details.get("readOnly"):
+                props_list.append("ReadOnly")
+            if prop_details.get("writeOnly"):
+                props_list.append("WriteOnly")
+            if prop_details.get("nullable"):
+                props_list.append("Nullable")
+
+            fields[prop_name] = {"type": prop_type, "props": props_list}
+
+        serializers_map[name] = {"fields": fields}
+
+    # 2. Parse Paths
+    paths = data.get("paths", {})
+    for path, methods in paths.items():
+        # Group methods by view (tag or operationId prefix)
+        view_methods = {}
+        view_name = "UnknownView"
+        doc_string = ""
+
+        for method_name, details in methods.items():
+            if method_name not in ["get", "post", "put", "patch", "delete"]:
+                continue
+
+            verb = method_name.upper()
+
+            # Determine View Name from tags
+            if "tags" in details and details["tags"]:
+                view_name = details["tags"][0]
+
+            # Docstring (Summary + Description)
+            summary = details.get("summary", "")
+            desc = details.get("description", "")
+            doc_string = f"{summary}\n{desc}".strip()
+
+            # Request Body
+            req_ser = "None"
+            req_body = details.get("requestBody", {})
+            content = req_body.get("content", {})
+            if "application/json" in content:
+                schema = content["application/json"].get("schema", {})
+                req_ser = extract_schema_type(schema) or "Object"
+            elif "multipart/form-data" in content:  # Handle file uploads
+                schema = content["multipart/form-data"].get("schema", {})
+                req_ser = extract_schema_type(schema) or "FormData"
+
+            # Responses
+            response_details = {}
+            res_summary = "None"
+
+            responses = details.get("responses", {})
+            for code, res_info in responses.items():
+                res_ser = "Unknown"
+                if "content" in res_info and "application/json" in res_info["content"]:
+                    schema = res_info["content"]["application/json"].get("schema", {})
+                    res_ser = extract_schema_type(schema)
+                elif code == "204":
+                    res_ser = "NoContent"
+
+                response_details[str(code)] = {
+                    "serializer": res_ser or "Object",
+                    "source": "openapi",
+                }
+
+                # Pick first success for summary
+                if code.startswith("2") and res_summary == "None":
+                    res_summary = f"{code}: {res_ser}"
+
+            view_methods[verb] = {
+                "request": req_ser,
+                "response": res_summary,
+                "response_details": response_details,
+                "req_source": "openapi",
+                "res_source": "openapi",
+            }
+
+        if view_methods:
+            specs.append(
+                {
+                    "path": path,
+                    "view": view_name,
+                    "doc": doc_string,
+                    "methods": view_methods,
+                }
+            )
+
+    return specs, serializers_map
+
+
+# --- MAIN SCANNER ENTRYPOINT ---
 def scan_project(root_path: str, callback=None):
     """
     Scans a Django REST Framework project to generate API documentation.
