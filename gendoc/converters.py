@@ -1,6 +1,3 @@
-import sys
-import os
-import subprocess
 from .utils import Colors, MARKDOWN_AVAILABLE, WEASYPRINT_AVAILABLE
 
 
@@ -222,7 +219,11 @@ def convert_to_html(md_content, output_path):
                     border-radius: 6px;
                     font-size: 14px;
                 }}
-                
+                /* Current match highlight - different color */
+                mark.highlight.current {{
+                    background-color: #ff9632;
+                    font-weight: bold;
+                }}
                 .controls button {{
                     padding: 6px 12px;
                     margin-left: 10px;
@@ -319,6 +320,9 @@ def convert_to_html(md_content, output_path):
                     <div style="font-weight: bold; font-size: 1.2em;">API Docs</div>
                     <div class="controls">
                         <input type="text" id="search-input" placeholder="Search endpoints...">
+                        <button onclick="previousMatch()" id="prev-btn" title="Previous match (Shift+Enter)">↑</button>
+                        <button onclick="nextMatch()" id="next-btn" title="Next match (Enter)">↓</button>
+                        <span id="match-counter" style="margin-left: 10px; font-size: 13px; color: #666;"></span>
                         <button onclick="expandAll()">Expand All</button>
                         <button onclick="collapseAll()">Collapse All</button>
                     </div>
@@ -328,8 +332,10 @@ def convert_to_html(md_content, output_path):
                     {html_body_content}
                 </div>
             </div>
-
             <script>
+                let currentMatchIndex = -1;
+                let allMatches = [];
+
                 document.addEventListener('DOMContentLoaded', () => {{
                     const content = document.getElementById('content');
                     const navLinksContainer = document.getElementById('nav-links');
@@ -369,8 +375,18 @@ def convert_to_html(md_content, output_path):
                     
                     const searchInput = document.getElementById('search-input');
                     searchInput.addEventListener('keyup', (e) => {{
-                        performSearch();
+                        if (e.key === 'Enter') {{
+                            if (e.shiftKey) {{
+                                previousMatch();
+                            }} else {{
+                                nextMatch();
+                            }}
+                        }} else {{
+                            performSearch();
+                        }}
                     }});
+
+                    updateNavigationButtons();
                 }});
                 
                 function expandAll() {{
@@ -388,56 +404,64 @@ def convert_to_html(md_content, output_path):
                     const blocks = document.querySelectorAll('.endpoint-block');
                     const navs = document.querySelectorAll('.nav-link');
                     
-                    // 1. Clear previous highlights
                     removeHighlights();
+                    allMatches = [];
+                    currentMatchIndex = -1;
 
                     blocks.forEach((block, index) => {{
                         const text = block.textContent.toLowerCase();
                         const isMatch = !term || text.includes(term);
                         
-                        // Show/Hide
                         block.style.display = isMatch ? 'block' : 'none';
                         if (navs[index]) navs[index].style.display = isMatch ? 'block' : 'none';
 
-                        // 2. Highlight matching text and Expand
                         if (term && isMatch) {{
-                             highlightText(block, term);
-                             block.classList.remove('collapsed');
+                            highlightText(block, term);
+                            block.classList.remove('collapsed');
                         }}
                     }});
+
+                    allMatches = Array.from(document.querySelectorAll('mark.highlight'));
+                    updateMatchCounter();
+                    updateNavigationButtons();
+
+                    if (allMatches.length > 0) {{
+                        currentMatchIndex = 0;
+                        scrollToMatch(0);
+                    }}
                 }}
 
                 function highlightText(element, term) {{
-                     if (!term) return;
-                     const regex = new RegExp(`(${{term.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&')}})`, 'gi');
-                     
-                     function traverse(node) {{
-                         if (node.nodeType === 3) {{ // Text node
-                             const match = node.data.match(regex);
-                             if (match) {{
-                                 const fragment = document.createDocumentFragment();
-                                 let lastIdx = 0;
-                                 node.data.replace(regex, (match, p1, offset) => {{
-                                     fragment.appendChild(document.createTextNode(node.data.slice(lastIdx, offset)));
-                                     const mark = document.createElement('mark');
-                                     mark.className = 'highlight';
-                                     mark.textContent = match;
-                                     fragment.appendChild(mark);
-                                     lastIdx = offset + match.length;
-                                     return match;
-                                 }});
-                                 fragment.appendChild(document.createTextNode(node.data.slice(lastIdx)));
-                                 node.parentNode.replaceChild(fragment, node);
-                             }}
-                             return;
-                         }}
-                         
-                         if (node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE' && node.tagName !== 'MARK') {{
-                             Array.from(node.childNodes).forEach(traverse);
-                         }}
-                     }}
-                     
-                     traverse(element);
+                    if (!term) return;
+                    const regex = new RegExp(`(${{term.replace(/[.*+?^${{}}()|[\\]\\\\]/g, '\\\\$&')}})`, 'gi');
+                    
+                    function traverse(node) {{
+                        if (node.nodeType === 3) {{
+                            const match = node.data.match(regex);
+                            if (match) {{
+                                const fragment = document.createDocumentFragment();
+                                let lastIdx = 0;
+                                node.data.replace(regex, (match, p1, offset) => {{
+                                    fragment.appendChild(document.createTextNode(node.data.slice(lastIdx, offset)));
+                                    const mark = document.createElement('mark');
+                                    mark.className = 'highlight';
+                                    mark.textContent = match;
+                                    fragment.appendChild(mark);
+                                    lastIdx = offset + match.length;
+                                    return match;
+                                }});
+                                fragment.appendChild(document.createTextNode(node.data.slice(lastIdx)));
+                                node.parentNode.replaceChild(fragment, node);
+                            }}
+                            return;
+                        }}
+                        
+                        if (node.nodeType === 1 && node.tagName !== 'SCRIPT' && node.tagName !== 'STYLE' && node.tagName !== 'MARK') {{
+                            Array.from(node.childNodes).forEach(traverse);
+                        }}
+                    }}
+                    
+                    traverse(element);
                 }}
 
                 function removeHighlights() {{
@@ -446,6 +470,62 @@ def convert_to_html(md_content, output_path):
                         parent.replaceChild(document.createTextNode(mark.textContent), mark);
                         parent.normalize();
                     }});
+                }}
+
+                function nextMatch() {{
+                    if (allMatches.length === 0) return;
+                    
+                    currentMatchIndex = (currentMatchIndex + 1) % allMatches.length;
+                    scrollToMatch(currentMatchIndex);
+                }}
+
+                function previousMatch() {{
+                    if (allMatches.length === 0) return;
+                    
+                    currentMatchIndex = currentMatchIndex <= 0 ? allMatches.length - 1 : currentMatchIndex - 1;
+                    scrollToMatch(currentMatchIndex);
+                }}
+
+                function scrollToMatch(index) {{
+                    if (index < 0 || index >= allMatches.length) return;
+
+                    allMatches.forEach(mark => mark.classList.remove('current'));
+
+                    const currentMark = allMatches[index];
+                    currentMark.classList.add('current');
+                    currentMark.scrollIntoView({{ behavior: 'smooth', block: 'center' }});
+
+                    updateMatchCounter();
+                }}
+
+                function updateMatchCounter() {{
+                    const counter = document.getElementById('match-counter');
+                    if (allMatches.length > 0) {{
+                        counter.textContent = `${{currentMatchIndex + 1}} / ${{allMatches.length}}`;
+                    }} else {{
+                        counter.textContent = '';
+                    }}
+                }}
+
+                function updateNavigationButtons() {{
+                    const prevBtn = document.getElementById('prev-btn');
+                    const nextBtn = document.getElementById('next-btn');
+                    const hasMatches = allMatches.length > 0;
+
+                    prevBtn.disabled = !hasMatches;
+                    nextBtn.disabled = !hasMatches;
+
+                    if (!hasMatches) {{
+                        prevBtn.style.opacity = '0.5';
+                        nextBtn.style.opacity = '0.5';
+                        prevBtn.style.cursor = 'not-allowed';
+                        nextBtn.style.cursor = 'not-allowed';
+                    }} else {{
+                        prevBtn.style.opacity = '1';
+                        nextBtn.style.opacity = '1';
+                        prevBtn.style.cursor = 'pointer';
+                        nextBtn.style.cursor = 'pointer';
+                    }}
                 }}
             </script>
         </body>
