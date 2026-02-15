@@ -75,7 +75,9 @@ class ModelScanner(ast.NodeVisitor):
     """Scans models.py files to extract field definitions."""
 
     def __init__(self):
-        self.models = {}  # { 'ModelName': { 'field_name': { 'type': ..., 'props': ... } } }
+        self.models = (
+            {}
+        )  # { 'ModelName': { 'field_name': { 'type': ..., 'props': ... } } }
         self.current_model = None
 
     def visit_ClassDef(self, node):
@@ -131,7 +133,9 @@ class SerializerScanner(ast.NodeVisitor):
     """Scans serializer files to extract field definitions."""
 
     def __init__(self, models_map=None):
-        self.serializers = {}  # { 'SerializerName': { 'fields': { 'name': {type, props} } } }
+        self.serializers = (
+            {}
+        )  # { 'SerializerName': { 'fields': { 'name': {type, props} } } }
         self.current_class = None
         self.models_map = models_map or {}
 
@@ -697,9 +701,7 @@ class ViewVisitor(ast.NodeVisitor):
                         default_status = (
                             "201"
                             if verb == "POST"
-                            else "204"
-                            if verb == "DELETE"
-                            else "200"
+                            else "204" if verb == "DELETE" else "200"
                         )
                         if verb == "DELETE":
                             response_map = {
