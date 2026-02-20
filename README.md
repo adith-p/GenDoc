@@ -89,7 +89,8 @@ doc-mint [OPTIONS]
 doc-mint --format html
 
 # Generate OpenAPI spec in custom directory
-doc-mint --format openapi --output ./api-docs
+doc-mint --format json --output ./api-docs
+doc-mint --format yaml --output ./api-docs
 
 # Generate all formats with custom project name
 doc-mint --format all --project-name "My Awesome API"
