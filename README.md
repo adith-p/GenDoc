@@ -89,14 +89,15 @@ doc-mint [OPTIONS]
 doc-mint --format html
 
 # Generate OpenAPI spec in custom directory
-doc-mint --format json --output ./api-docs
-doc-mint --format yaml --output ./api-docs
+doc-mint --format json --output -d ./api-docs
+doc-mint --format yaml --output -d ./api-docs
 
-# Generate all formats with custom project name
-doc-mint --format all --project-name "My Awesome API"
+# Generate Postman collection v2.1
+doc-mint --format postman --output ./api-docs
 
+postman
 # Verbose output
-doc-mint -v
+doc-mint -vb
 ```
 
 ## 📄 Output Formats
